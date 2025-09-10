@@ -133,15 +133,4 @@
  C:/Users/HP/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/esp_hw_support/include/soc/esp32/spiram.h \
  C:/Users/HP/.platformio/packages/framework-arduinoespressif32/cores/esp32/io_pin_remap.h \
  C:/Users/HP/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h \
- include/sensor_bmp280.h \
- .pio/libdeps/esp32dev/Adafruit\ BMP280\ Library/Adafruit_BMP280.h \
- .pio/libdeps/esp32dev/Adafruit\ Unified\ Sensor/Adafruit_Sensor.h \
- C:/Users/HP/.platformio/packages/framework-arduinoespressif32/cores/esp32/Print.h \
- .pio/libdeps/esp32dev/Adafruit\ BusIO/Adafruit_I2CDevice.h \
- C:/Users/HP/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src/Wire.h \
- C:/Users/HP/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal.h \
- .pio/libdeps/esp32dev/Adafruit\ BusIO/Adafruit_SPIDevice.h \
- C:/Users/HP/.platformio/packages/framework-arduinoespressif32/libraries/SPI/src/SPI.h \
- C:/Users/HP/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.h \
- include/sensor_dht22.h .pio/libdeps/esp32dev/DHT\ sensor\ library/DHT.h \
  include/sd_logger.h

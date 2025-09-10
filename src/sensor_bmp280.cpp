@@ -2,30 +2,27 @@
 #include <Wire.h>
 #include <Adafruit_BMP280.h>
 #include "sensor_bmp280.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
-Adafruit_BMP280 bmp;
+static Adafruit_BMP280 bmp;
+static SemaphoreHandle_t bmpMutex;
 
 void bmp280_init() {
-    if (!bmp.begin(0x76)) {
+    if (!bmp.begin(0x76)) {   // use your module's I2C address (0x76 or 0x77)
         Serial.println("BMP280 not found! Check wiring.");
-        while (1);
+        while (true) {
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
     }
-}
-
-float bmp280_getTemperature() {
-    return bmp.readTemperature();
+    bmpMutex = xSemaphoreCreateMutex();
 }
 
 float bmp280_getPressure() {
-    return bmp.readPressure() / 100.0;  // hPa
+    float pressure = NAN;
+    if (xSemaphoreTake(bmpMutex, pdMS_TO_TICKS(200))) {
+        pressure = bmp.readPressure() / 100.0;
+        xSemaphoreGive(bmpMutex);
+    }
+    return pressure;
 }
-
-float bmp280_getAltitude(float seaLevelhPa) {
-    return bmp.readAltitude(seaLevelhPa);
-}
-
-
-
-
-
-
