@@ -1,11 +1,8 @@
 #include <Arduino.h>
 #include "sd_logger.h"
 
-void setup() {
-    Serial.begin(115200);
-    startLogger();
-}
+#define NULL ((void*)0)
 
-void loop() {
-    // Nothing — FreeRTOS runs tasks
+void setup() {
+    startLogger();
 }
