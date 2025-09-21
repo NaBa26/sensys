@@ -4,13 +4,14 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
+
 #include "sensor_dht22.h"
 #include "sensor_bmp280.h"
 
-#define SD_CS 5
-#define MAX_ENTRIES 5000
-#define DHT_PIN 4
-#define QUEUE_SIZE 20
+#define SD_CS       5      // change if you hit strapping-pin issues
+#define DHT_PIN     4
+#define QUEUE_SIZE  50     // larger buffer to tolerate short SD stalls
+#define FLUSH_EVERY 10     // flush to SD every N writes
 
 struct SensorData {
     unsigned long time_ms;
@@ -18,14 +19,16 @@ struct SensorData {
     float pressure;
 };
 
-static QueueHandle_t dataQueue;
-static SemaphoreHandle_t serialMutex;
+static QueueHandle_t dataQueue = NULL;
+static SemaphoreHandle_t serialMutex = NULL;
 
-File logFile;
+static File logFile;
 static int entryCount = 0;
 
+// --- helpers ---------------------------------------------------------------
+
 static void safePrint(const char* format, ...) {
-    if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50))){
+    if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(200))) {
         va_list args;
         va_start(args, format);
         char buffer[256];
@@ -36,99 +39,96 @@ static void safePrint(const char* format, ...) {
     }
 }
 
+// Open /data.csv and write header if file is empty or new
+static bool openLogFile() {
+    logFile = SD.open("/data.csv", FILE_WRITE); // truncates existing file
+    if (!logFile) {
+        safePrint("Failed to open /data.csv for writing!");
+        return false;
+    }
+
+    logFile.println("Time_ms,Temp_C,Pressure_hPa");
+    safePrint("Opened /data.csv and wrote header (file handle=%p)", &logFile);
+    return true;
+}
+
+// --- tasks -----------------------------------------------------------------
+
 static void sensorTask(void *pvParameters) {
-    const UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
-    safePrint("Space remaining before the task has stated: %d", uxHighWaterMark);
-
     TickType_t lastWake = xTaskGetTickCount();
+    const TickType_t interval = pdMS_TO_TICKS(2000); // sensor sample every 2s
 
-    while (true) {
-        SensorData data;
-        data.time_ms = millis();
-        data.temp = dht22_getTemperature();
-        data.pressure = bmp280_getPressure();
+    for (;;) {
+        SensorData sample;
+        sample.time_ms = millis();
+        sample.temp = dht22_getTemperature();
+        sample.pressure = bmp280_getPressure();
 
-        if (xQueueSend(dataQueue, &data, pdMS_TO_TICKS((100)) != pdTRUE)) {
-            safePrint("Queue full! Data dropped");
+        if (xQueueSend(dataQueue, &sample, pdMS_TO_TICKS(500)) != pdTRUE) {
+            safePrint("Queue full! Dropped sample at %lu", sample.time_ms);
         }
-        safePrint("Space remaining after the data has been sent to the queue: %d", uxHighWaterMark);
 
-        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(2000)); // every 2s
+        vTaskDelayUntil(&lastWake, interval);
     }
 }
 
-// Logs queued data to SD
 static void loggerTask(void *pvParameters) {
-    while (true) {
-        SensorData data;
+    if (!openLogFile()) {
+        safePrint("LoggerTask: cannot open log file, aborting task.");
+        vTaskDelete(NULL);
+    }
 
-        if (xQueueReceive(dataQueue, &data, portMAX_DELAY)) {
-                if (entryCount == 0) {
-                    logFile = SD.open("/data.csv", FILE_WRITE);
-                    if (logFile) {
-                        logFile.println("Time_ms,Temp_C,Pressure_hPa");
-                        logFile.flush(); //to ensure that the header is written
-                        safePrint("Started a new log file here.");
-                    } else {
-                        safePrint("Failed to open the log file.");
-                        continue;
-                    }
-                }
+    entryCount = 0;
 
-                if (logFile) {
-                    logFile.printf("%lu,%.2f,%.2f\n",
-                                   data.time_ms,
-                                   data.temp,
-                                   data.pressure);
-                    // flushing only periodically
-                    if (entryCount%10==0) {
-                        logFile.flush();
-                    }
-                    entryCount++;
-                }
+    SensorData received;
+    for (;;) {
+        if (xQueueReceive(dataQueue, &received, portMAX_DELAY) == pdTRUE) {
+            if (!logFile) {
+                safePrint("LoggerTask: file handle invalid");
+                while (true) vTaskDelay(pdMS_TO_TICKS(1000));
+            }
 
-            safePrint("[Logger] Temp=%.2f °C, Pressure=%.2f hPa\n",
-                          data.temp, data.pressure);
+            logFile.printf("%lu,%.2f,%.2f\n",
+                           received.time_ms,
+                           received.temp,
+                           received.pressure);
+            entryCount++;
 
-                if (entryCount >= MAX_ENTRIES) {
-                    logFile.flush();
-                    logFile.close();
-                    SD.rename("/data.csv", "/data_old.csv");
+            if ((entryCount % FLUSH_EVERY) == 0) {
+                logFile.flush();
+                safePrint("Flushed after %d entries", entryCount);
+            }
 
-                    entryCount = 0;
-                    safePrint("Log file rotated.");
-                }
+            safePrint("Logged entry %d -> /data.csv : %lu, %.2f, %.2f",
+                      entryCount, received.time_ms, received.temp, received.pressure);
         }
     }
 }
 
 void startLogger() {
-    //normal Serial.println() works here cause only the main thread is running
     Serial.begin(115200);
+    vTaskDelay(pdMS_TO_TICKS(10));
 
     if (!SD.begin(SD_CS)) {
-        Serial.println("SD init failed!\n");
-        while (true) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
+        Serial.println("SD init failed! Halting.");
+        while (true) vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    Serial.println("SD card initialized\n");
+    Serial.println("SD initialized");
 
     dht22_init(DHT_PIN);
     bmp280_init();
-    Serial.println("Sensors initialized\n");
+    Serial.println("Sensors initialized");
 
-
-    dataQueue = xQueueCreate(10, sizeof(SensorData));
+    dataQueue = xQueueCreate(QUEUE_SIZE, sizeof(SensorData));
     serialMutex = xSemaphoreCreateMutex();
 
     if (!dataQueue || !serialMutex) {
-        Serial.println("Failed to create queue/semaphores!\n");
+        Serial.println("Failed to create queue or mutex; halting.");
         while (true) vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    xTaskCreate(sensorTask, "Sensor Task", 2048, NULL, 3,  NULL );
-    xTaskCreate(loggerTask, "Logger Task", 2048, NULL, 2,  NULL );
+    xTaskCreate(loggerTask, "Logger", 4096, NULL, 3, NULL);
+    xTaskCreate(sensorTask, "Sensor", 4096, NULL, 2, NULL);
 
-    Serial.println("Tasks created successfully.\n");
+    safePrint("Tasks created: Logger (prio 3), Sensor (prio 2). Queue size=%d", QUEUE_SIZE);
 }
